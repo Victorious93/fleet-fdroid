@@ -1,0 +1,62 @@
+name: Update F-Droid repo
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [new-release]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: fdroid
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install fdroidserver
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fdroidserver apksigner
+      - name: Download latest APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch_apks.py
+      - name: Configure and run fdroid update
+        env:
+          KS_B64: ${{ secrets.FDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.FDROID_KEYSTORE_PASS }}
+          KEY_PASS: ${{ secrets.FDROID_KEY_PASS }}
+        run: |
+          echo "$KS_B64" | base64 -d > keystore.p12
+          cat > config.yml <<CFG
+          repo_url: https://victorious93.github.io/fleet-fdroid/repo
+          repo_name: Victorious93 Fleet
+          repo_description: Android apps from the Victorious93 fleet, rebuilt from GitHub releases.
+          repo_keyalias: fleetrepo
+          keystore: keystore.p12
+          keystorepass: "$KS_PASS"
+          keypass: "$KEY_PASS"
+          keydname: CN=Victorious93 fleet-fdroid, O=Victorious93
+          allow_disabled_algorithms: true
+          CFG
+          chmod 600 config.yml keystore.p12
+          fdroid update --create-metadata --pretty --use-date-from-apk
+          rm -f keystore.p12 config.yml
+          mkdir -p site && cp -r repo site/repo
+          cp README.md site/index.md 2>/dev/null || true
+          echo '<meta http-equiv="refresh" content="0; url=https://github.com/Victorious93/fleet-fdroid">' > site/index.html
+          ls -la site/repo
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
